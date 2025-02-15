@@ -1,6 +1,8 @@
 # CUDAとcuDNNが含まれるNVIDIAのベースイメージを使用
 FROM nvidia/cuda:11.8.0-cudnn8-runtime-ubuntu20.04
 
+RUN ln -sf /usr/share/zoneinfo/Asia/Tokyo /etc/localtime
+
 # システムパッケージのインストール
 RUN apt-get update && apt-get install -y \
     python3 python3-pip python3-dev \

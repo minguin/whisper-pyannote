@@ -64,7 +64,7 @@ def predict(audio_data, _model):
         padded_audio_path = padded_tmp_file.name
 
     with st.spinner("音声文字起こし（whisper）処理中..."):
-        result = _model["whisper_model"].transcribe(padded_audio_path)
+        result = _model["whisper_model"].transcribe(padded_audio_path, language="ja")
     
     with st.spinner("話者分離（pyannote）処理中..."):
         with ProgressHook() as hook:
