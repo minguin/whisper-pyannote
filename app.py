@@ -1,14 +1,20 @@
-import streamlit as st
-import tempfile
-import soundfile as sf
-import numpy as np
-import librosa
+
 import os
+import copy
+import tempfile
+from dotenv import load_dotenv
+import numpy as np
+import streamlit as st
+import librosa
 import torch
 import whisper
+import soundfile as sf
 from pyannote.audio import Pipeline
 from pyannote.audio.pipelines.utils.hook import ProgressHook
-# https://github.com/pyannote/pyannote-audio/blob/develop/tutorials/community/offline_usage_speaker_diarization.ipynb
+
+load_dotenv(verbose=True)
+PATH_TO_CONFIG = "models/pyannote_diarization_config.yaml"
+
 def format_time(seconds):
     minutes = int(seconds // 60)
     secs = seconds % 60
@@ -26,23 +32,24 @@ def get_speaker_for_segment(seg, diar_segments):
     return assigned_speaker if assigned_speaker is not None else "UNKNOWN"
 
 @st.cache_resource(show_spinner=False)
-def load_model():
+def load_model(model_name="turbo"):
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     # pyannoteの読込
-    HF_TOKEN = os.getenv("HF_TOKEN", "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")
-    diar_pipeline = Pipeline.from_pretrained("pyannote/speaker-diarization-3.1", use_auth_token=HF_TOKEN)
+    # diar_pipeline = Pipeline.from_pretrained("pyannote/speaker-diarization-3.1", use_auth_token=os.getenv("HF_TOKEN"))
+    diar_pipeline = Pipeline.from_pretrained(PATH_TO_CONFIG)
     diar_pipeline.to(device)
     # whisperの読込
-    whisper_model = whisper.load_model("turbo", device=device)
-    st.info(f"{device}環境にて実行")
+    whisper_model = whisper.load_model(model_name, device=device)
+    st.info(f"{device}にて実行")
     return {"device": device, "diar_pipeline": diar_pipeline, "whisper_model": whisper_model}
 
 @st.cache_resource(show_spinner=False)
 def load_audio_file(audio_path, sr=16000):
     return librosa.load(audio_path, sr=sr)
 
+# model_nameはcacheのための識別
 @st.cache_resource(show_spinner=False)
-def predict(audio_data, _model):
+def predict(audio_data, model_name, _model, initial_prompt=None, language="ja"):
     # 元音声を一時ファイルに保存
     with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as tmp_file:
         tmp_file.write(audio_data)
@@ -64,7 +71,7 @@ def predict(audio_data, _model):
         padded_audio_path = padded_tmp_file.name
 
     with st.spinner("音声文字起こし（whisper）処理中..."):
-        result = _model["whisper_model"].transcribe(padded_audio_path, language="ja")
+        result = _model["whisper_model"].transcribe(padded_audio_path, initial_prompt=initial_prompt, language=language)
     
     with st.spinner("話者分離（pyannote）処理中..."):
         with ProgressHook() as hook:
@@ -93,21 +100,19 @@ def predict(audio_data, _model):
 
 def main():
     st.markdown("### 音声文字起こし（whisper）・話者分離（pyannote）")
-    
-    # セッション状態に結果を保持するための初期化
-    if 'segments' not in st.session_state:
-        st.session_state['segments'] = None
 
     uploaded_file = st.file_uploader("音声ファイルのアップロード", type=["wav", "mp3", "m4a"])
-    
+    model_name = st.radio("モデルの選択", ["tiny", "base", "small", "medium", "large", "turbo"], index=5, horizontal=True)
+    language = st.radio("言語の選択", ["ja", "en"], index=0, horizontal=True)
+    initial_prompt = st.text_area("initial_promptの設定（句読点含む文章や単語スペースなど与える）", value="")
     # 「処理開始」ボタンが押されたら新規処理を実行して結果を上書き
     if uploaded_file is not None:
         if st.button("処理開始"):
             with st.spinner("モデルを読み込み中..."):
-                model = load_model()
+                model = load_model(model_name)
             with st.spinner("音声ファイルを読み込み中..."):
                 audio_data = uploaded_file.read()
-            segments = predict(audio_data, model)
+            segments = predict(audio_data, model_name, model, initial_prompt, language)
             if segments:
                 st.session_state['segments'] = segments
                 st.success("処理が完了しました。")
@@ -115,10 +120,27 @@ def main():
                 st.error("処理が失敗しました。")
     
     # 前回の結果がセッションに保持されていれば表示する
-    if st.session_state['segments'] is not None:
+    if 'segments' in st.session_state:
+        segments = copy.deepcopy(st.session_state['segments'])
+        # データ中のユニークな speaker を取得
+        unique_speakers = sorted(list({entry["speaker"] for entry in st.session_state['segments']}))
+        st.markdown("#### 置換先名を設定")
+        # 置換用のマッピングを動的に入力できるようにテキストボックスを用意
+        replacement_mapping = {}
+        for speaker in unique_speakers:
+            # 初期値は元のスピーカー名とする（変更がなければそのまま）
+            replacement = st.text_input(f"{speaker} の置換先名", value=speaker)
+            replacement_mapping[speaker] = replacement
+        # 各エントリーの speaker を、入力されたマッピングに従って更新
+        for seg in segments:
+            orig = seg.get("speaker")
+            # 入力が空でない、かつ元と異なれば置換（入力が空の場合はそのまま）
+            if orig in replacement_mapping and replacement_mapping[orig] and replacement_mapping[orig] != orig:
+                seg["speaker"] = replacement_mapping[orig]
+
         st.markdown("#### 結果")
         result_text = ""
-        for seg in st.session_state['segments']:
+        for seg in segments:
             line = f"[{seg['start']} - {seg['end']}] {seg['speaker']}: {seg['text']}\n"
             st.write(line)
             result_text += line
