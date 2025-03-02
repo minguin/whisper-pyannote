@@ -102,7 +102,7 @@ def main():
     st.markdown("### 音声文字起こし（whisper）・話者分離（pyannote）")
 
     uploaded_file = st.file_uploader("音声ファイルのアップロード", type=["wav", "mp3", "m4a"])
-    model_name = st.radio("モデルの選択", ["tiny", "base", "small", "medium", "large", "turbo"], index=5, horizontal=True)
+    model_name = st.radio("モデルの選択", ["tiny", "base", "small", "medium", "large", "turbo"], index=4, horizontal=True)
     language = st.radio("言語の選択", ["ja", "en"], index=0, horizontal=True)
     initial_prompt = st.text_area("initial_promptの設定（句読点含む文章や単語スペースなど与える）", value="")
     # 「処理開始」ボタンが押されたら新規処理を実行して結果を上書き
@@ -138,13 +138,45 @@ def main():
             if orig in replacement_mapping and replacement_mapping[orig] and replacement_mapping[orig] != orig:
                 seg["speaker"] = replacement_mapping[orig]
 
+        # st.markdown("#### 結果")
+        # result_text = ""
+        # for seg in segments:
+        #     line = f"[{seg['start']} - {seg['end']}] {seg['speaker']}: {seg['text']}\n"
+        #     st.write(line)
+        #     result_text += line
         st.markdown("#### 結果")
         result_text = ""
-        for seg in segments:
-            line = f"[{seg['start']} - {seg['end']}] {seg['speaker']}: {seg['text']}\n"
+
+        if segments:
+            # 最初のセグメントでグループの初期化
+            group_start = segments[0]['start']
+            group_end = segments[0]['end']
+            group_speaker = segments[0]['speaker']
+            group_text = segments[0]['text']
+            
+            # 2番目以降のセグメントを処理
+            for seg in segments[1:]:
+                if seg['speaker'] == group_speaker:
+                    # 同じ speaker の場合は、終了時刻を更新しテキストを連結（間に空白を入れる）
+                    group_end = seg['end']
+                    group_text += " " + seg['text']
+                else:
+                    # speaker が変わったら、前のグループを出力
+                    line = f"[{group_start} - {group_end}] {group_speaker}: {group_text}\n"
+                    st.write(line)
+                    result_text += line
+                    
+                    # 新しいグループとして初期化
+                    group_start = seg['start']
+                    group_end = seg['end']
+                    group_speaker = seg['speaker']
+                    group_text = seg['text']
+            
+            # 最後のグループも出力
+            line = f"[{group_start} - {group_end}] {group_speaker}: {group_text}\n"
             st.write(line)
             result_text += line
-        
+
         # ダウンロードボタンの設置（テキスト形式）
         st.download_button(
             label="結果をテキストファイルとしてダウンロード",
